@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -42,7 +41,7 @@ public class JoinServiceImpl implements JoinService {
     @Override
     @Transactional(readOnly = true)
     public List<InterestGroupResponse> listRecruitingGroups() {
-        return interestGroupRepository.findActiveRecruitingOrderByNameCaseInsensitive().stream()
+        return interestGroupRepository.findByActiveTrueAndRecruitingTrueOrderBySortOrderAsc().stream()
                 .map(InterestGroupResponse::from)
                 .toList();
     }
@@ -124,133 +123,10 @@ public class JoinServiceImpl implements JoinService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<InterestGroupResponse> listAllGroupsAdmin(String nameQuery) {
-        List<InterestGroup> list;
-        if (nameQuery == null || nameQuery.isBlank()) {
-            list = interestGroupRepository.findAllOrderByNameCaseInsensitive();
-        } else {
-            list = interestGroupRepository.findByNamePartOrderByNameCaseInsensitive(nameQuery.trim());
-        }
-        return list.stream()
+    public List<InterestGroupResponse> listAllGroupsAdmin() {
+        return interestGroupRepository.findAllByOrderBySortOrderAsc().stream()
                 .map(InterestGroupResponse::from)
                 .toList();
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<GroupMemberAdminResponse> listMembersForGroup(Long groupId) {
-        if (groupId == null) {
-            throw new IllegalArgumentException("Group id is required.");
-        }
-        interestGroupRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Interest group not found."));
-        return userGroupMembershipRepository.findByInterestGroup_IdWithUser(groupId).stream()
-                .map(GroupMemberAdminResponse::from)
-                .toList();
-    }
-
-    @Override
-    @Transactional
-    public void removeGroupMembership(Long groupId, Long membershipId, String adminUsername) {
-        if (groupId == null || membershipId == null) {
-            throw new IllegalArgumentException("Group and membership ids are required.");
-        }
-        UserGroupMembership m = userGroupMembershipRepository
-                .findByIdAndInterestGroup_Id(membershipId, groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Membership not found in this group."));
-        String uname = m.getUser().getUsername();
-        userGroupMembershipRepository.delete(m);
-        auditService.record(
-                AuditAction.REMOVE_GROUP_MEMBERSHIP,
-                adminUsername,
-                "Removed user " + uname + " from group id=" + groupId + " membershipId=" + membershipId
-        );
-    }
-
-    @Override
-    @Transactional
-    public void adminSetMemberSiteTier(Long userId, MemberSiteTier tier, String adminUsername) {
-        if (userId == null || tier == null) {
-            throw new IllegalArgumentException("User id and tier are required.");
-        }
-        UserAccount user = userAccountRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found."));
-        if (user.getRole() != RoleType.MEMBER) {
-            throw new IllegalArgumentException("Site access tier applies only to Member accounts.");
-        }
-        user.setMemberSiteTier(tier);
-        userAccountRepository.save(user);
-        auditService.record(
-                AuditAction.UPDATE_MEMBER_SITE_TIER,
-                adminUsername,
-                "Set member site tier to " + tier + " for " + user.getUsername()
-        );
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public MemberLookupResponse lookupMembers(String rawUsername, MemberSiteTier memberSiteTier) {
-        String q = rawUsername == null ? "" : rawUsername.trim();
-        boolean hasUsername = !q.isBlank();
-        boolean hasTier = memberSiteTier != null;
-        if (!hasUsername && !hasTier) {
-            throw new IllegalArgumentException("Provide NetID (or partial NetID) and/or site level (L1 or L2).");
-        }
-        List<UserAccount> users;
-        if (hasUsername) {
-            users = new ArrayList<>();
-            userAccountRepository.findByUsernameIgnoreCase(q).ifPresent(users::add);
-            if (users.isEmpty()) {
-                users = new ArrayList<>(userAccountRepository.findTop10ByUsernameContainingIgnoreCaseOrderByUsernameAsc(q));
-            }
-            if (hasTier) {
-                MemberSiteTier tier = memberSiteTier;
-                users = users.stream()
-                        .filter(u -> u.getRole() == RoleType.MEMBER && effectiveMemberTier(u) == tier)
-                        .toList();
-            }
-        } else {
-            users = userAccountRepository.findTop200ByRoleAndMemberSiteTierOrderByUsernameAsc(RoleType.MEMBER, memberSiteTier);
-        }
-        List<MembershipLookupResult> results = users.stream().map(this::toMembershipLookupResult).toList();
-        return new MemberLookupResponse(results);
-    }
-
-    private static MemberSiteTier effectiveMemberTier(UserAccount u) {
-        return u.getMemberSiteTier() != null ? u.getMemberSiteTier() : MemberSiteTier.L1;
-    }
-
-    private MembershipLookupResult toMembershipLookupResult(UserAccount u) {
-        List<MemberGroupRow> rows = userGroupMembershipRepository.findByUser_IdWithGroup(u.getId()).stream()
-                .map(m -> new MemberGroupRow(
-                        m.getId(),
-                        m.getInterestGroup().getId(),
-                        m.getInterestGroup().getName(),
-                        m.getCreatedAt()
-                ))
-                .toList();
-        return new MembershipLookupResult(
-                u.getId(),
-                u.getUsername(),
-                u.getEmail(),
-                u.getRole().name(),
-                u.getStatus().name(),
-                siteAccessLevelLabel(u),
-                memberTierCode(u),
-                u.getCreatedAt(),
-                rows
-        );
-    }
-
-    private static String memberTierCode(UserAccount u) {
-        if (u.getRole() != RoleType.MEMBER) {
-            return null;
-        }
-        return effectiveMemberTier(u).name();
-    }
-
-    private static String siteAccessLevelLabel(UserAccount u) {
-        return u.getSiteAccessLevelLabel();
     }
 
     @Override
@@ -321,12 +197,6 @@ public class JoinServiceImpl implements JoinService {
                 .toList();
     }
 
-    /**
-     * Approving adds the user to the group. Students with an already-approved account are promoted to
-     * {@link RoleType#MEMBER} with {@link MemberSiteTier} from the request ({@link MemberSiteTier#L1} by default).
-     * Existing {@link RoleType#MEMBER} accounts get their site tier updated from the same field so it stays aligned
-     * with Interest groups / Find Members. {@link RoleType#ADMIN} accounts are not tier- or role-changed.
-     */
     @Override
     @Transactional
     public JoinApplicationResponse reviewApplication(Long applicationId, ReviewJoinApplicationRequest request, String adminUsername) {
@@ -338,7 +208,6 @@ public class JoinServiceImpl implements JoinService {
         UserAccount applicant = app.getUser();
         InterestGroup group = app.getInterestGroup();
         boolean approved = Boolean.TRUE.equals(request.approved());
-        MemberSiteTier chosenTier = request.memberSiteTier() != null ? request.memberSiteTier() : MemberSiteTier.L1;
         LocalDateTime now = LocalDateTime.now();
         app.setReviewedAt(now);
         app.setReviewedBy(adminUsername);
@@ -350,16 +219,8 @@ public class JoinServiceImpl implements JoinService {
                 m.setInterestGroup(group);
                 userGroupMembershipRepository.save(m);
             }
-            boolean saveApplicant = false;
-            if (applicant.getStatus() == UserStatus.APPROVED && applicant.getRole() == RoleType.STUDENT) {
+            if (applicant.getStatus() == UserStatus.APPROVED && applicant.getRole() == RoleType.GUEST) {
                 applicant.setRole(RoleType.MEMBER);
-                applicant.setMemberSiteTier(chosenTier);
-                saveApplicant = true;
-            } else if (applicant.getRole() == RoleType.MEMBER) {
-                applicant.setMemberSiteTier(chosenTier);
-                saveApplicant = true;
-            }
-            if (saveApplicant) {
                 userAccountRepository.save(applicant);
             }
             auditService.record(
@@ -390,6 +251,7 @@ public class JoinServiceImpl implements JoinService {
         g.setDescription(request.description() != null ? request.description().trim() : null);
         g.setRecruiting(request.recruiting());
         g.setActive(request.active());
+        g.setSortOrder(request.sortOrder());
     }
 
     private UserAccount requireUser(String username) {

@@ -11,14 +11,9 @@
       <el-select v-model="draft.month" placeholder="Month" clearable>
         <el-option v-for="month in monthOptions" :key="month.value" :label="month.label" :value="month.value" />
       </el-select>
-      <el-input
-        v-model="draft.yearInput"
-        placeholder="Year (e.g. 2026)"
-        clearable
-        maxlength="4"
-        inputmode="numeric"
-        class="year-input"
-      />
+      <el-select v-model="draft.year" placeholder="Year" clearable>
+        <el-option v-for="year in yearOptions" :key="year" :label="String(year)" :value="year" />
+      </el-select>
       <el-select v-model="draft.type" placeholder="Types" clearable>
         <el-option label="Competition" value="competition" />
         <el-option label="Workshop" value="workshop" />
@@ -113,7 +108,7 @@ const authStore = useAuthStore()
 
 const draft = reactive({
   month: null,
-  yearInput: '',
+  year: null,
   type: '',
   keyword: ''
 })
@@ -139,6 +134,13 @@ const monthOptions = [
   { value: 11, label: 'November' },
   { value: 12, label: 'December' }
 ]
+
+const yearOptions = computed(() => {
+  const fromEvents = events.value.map((item) => item.eventDate.getFullYear())
+  const currentYear = new Date().getFullYear()
+  const set = new Set([currentYear - 1, currentYear, currentYear + 1, ...fromEvents])
+  return [...set].sort((a, b) => b - a)
+})
 
 const filteredEvents = computed(() => {
   const keyword = applied.keyword.trim().toLowerCase()
@@ -217,23 +219,9 @@ async function loadEvents() {
   }
 }
 
-function appliedYearFromInput() {
-  const raw = String(draft.yearInput ?? '').trim()
-  if (!raw) return null
-  if (!/^\d{4}$/.test(raw)) return null
-  const y = Number(raw)
-  if (y < 1 || y > 9999) return null
-  return y
-}
-
 function applyFilters() {
   applied.month = draft.month
-  const yearTrim = String(draft.yearInput ?? '').trim()
-  if (yearTrim && !/^\d{4}$/.test(yearTrim)) {
-    ElMessage.warning('Year must be four digits (e.g. 2026), or leave empty.')
-    return
-  }
-  applied.year = appliedYearFromInput()
+  applied.year = draft.year
   applied.type = draft.type
   applied.keyword = draft.keyword
 }

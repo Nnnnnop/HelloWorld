@@ -28,9 +28,7 @@
       <h2>Community Values</h2>
       <p>
         We encourage collaborative learning, open communication, and responsible knowledge sharing.
-        Public resources appear in Search for anyone; Member: Level1 resources require an approved SIG member account (either site
-        Level 1 or 2) or an administrator; Member: Level2 resources require administrators or approved members designated as Level 2 on
-        their account.
+        All resource levels require login: public resources are available to any logged-in PolyU user, while member-only resources are limited to approved SIG members and administrators.
       </p>
     </div>
   </el-card>

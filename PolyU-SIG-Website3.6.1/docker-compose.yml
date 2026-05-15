@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   postgres:
     image: postgres:16
@@ -46,13 +48,19 @@ services:
       SIG_SEARCH_ENABLED: "true"
       ES_REPO_ENABLED: "true"
       APP_UPLOAD_DIR: /app/files
-      APP_PREVIEW_DIR: /app/preview-cache
+      JAVA_OPTS: "-Xms1g -Xmx2g"
       OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-sig-client}
       OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-sig-secret}
       OAUTH_AUTH_URI: ${OAUTH_AUTH_URI:-http://localhost:9000/oauth2/authorize}
       OAUTH_TOKEN_URI: ${OAUTH_TOKEN_URI:-http://localhost:9000/oauth2/token}
       OAUTH_USERINFO_URI: ${OAUTH_USERINFO_URI:-http://localhost:9000/userinfo}
       OAUTH_JWK_URI: ${OAUTH_JWK_URI:-http://localhost:9000/oauth2/jwks}
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+        reservations:
+          memory: 1g
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,13 +70,6 @@ services:
       - "8080:8080"
     volumes:
       - app_files:/app/files
-      - app_preview_cache:/app/preview-cache
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health >/dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 120s
 
   frontend:
     build:
@@ -76,14 +77,11 @@ services:
       dockerfile: Dockerfile
     container_name: sig-frontend
     depends_on:
-      app:
-        condition: service_healthy
+      - app
     ports:
       - "5173:5173"
 
   cloudflared:
-    profiles:
-      - tunnel
     image: cloudflare/cloudflared:latest
     container_name: sig-cloudflared
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
@@ -95,4 +93,3 @@ volumes:
   postgres_data:
   es_data:
   app_files:
-  app_preview_cache:

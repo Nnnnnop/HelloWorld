@@ -1,7 +1,7 @@
 package com.example.polyusigwebsite.entity;
 
 public enum RoleType {
-    STUDENT,
+    GUEST,
     MEMBER,
     ADMIN
 }

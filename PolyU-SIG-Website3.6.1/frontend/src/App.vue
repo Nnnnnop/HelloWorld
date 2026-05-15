@@ -14,8 +14,9 @@
               <el-button size="small">Admin</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="go('/admin/users')">Site roles</el-dropdown-item>
                   <el-dropdown-item @click="go('/admin/posts')">Publish News/Announcement/Event</el-dropdown-item>
+                  <el-dropdown-item @click="go('/admin/approval')">Member Approval</el-dropdown-item>
+                  <el-dropdown-item @click="go('/admin/join')">Join Us (groups & applications)</el-dropdown-item>
                   <el-dropdown-item @click="go('/admin/audit')">Audit Logs</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -48,14 +49,9 @@
       <div v-else class="nav-row desktop-only">
         <el-menu :default-active="activePath" mode="horizontal" router class="main-menu">
           <el-menu-item index="/home/internal_portal/home">Home</el-menu-item>
-          <el-menu-item v-if="showStorageNav" index="/home/internal_portal/files">Source Management</el-menu-item>
+          <el-menu-item v-if="showStorageNav" index="/home/internal_portal/files">Storage</el-menu-item>
           <el-menu-item index="/home/internal_portal/search">Search</el-menu-item>
-          <el-menu-item index="/home/internal_portal/favourites">Favourites</el-menu-item>
-          <el-menu-item v-if="!authStore.isAdmin" index="/home/internal_portal/join-us">Join Us</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/admin/membership">
-            Membership Management
-          </el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/admin/users">Site roles</el-menu-item>
+          <el-menu-item index="/home/internal_portal/join-us">Join Us</el-menu-item>
           <el-menu-item index="/public-portal">Public Portal</el-menu-item>
         </el-menu>
       </div>
@@ -88,20 +84,20 @@
         <el-button text @click="goFromDrawer('/announcements')">Announcement</el-button>
         <el-button text @click="goFromDrawer('/about')">About SIG</el-button>
         <el-button text @click="enterInternalPortalFromDrawer">Internal Portal</el-button>
-        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/users')">Site roles</el-button>
         <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/posts')">Publish News/Announcement/Event</el-button>
+        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/approval')">Member Approval</el-button>
+        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/join')">Join Us (admin)</el-button>
         <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/audit')">Audit Logs</el-button>
       </template>
       <template v-else>
         <el-button text @click="goFromDrawer('/home/internal_portal/home')">Home</el-button>
-        <el-button v-if="showStorageNav" text @click="goFromDrawer('/home/internal_portal/files')">Source Management</el-button>
+        <el-button v-if="showStorageNav" text @click="goFromDrawer('/home/internal_portal/files')">Storage</el-button>
         <el-button text @click="goFromDrawer('/home/internal_portal/search')">Search</el-button>
-        <el-button text @click="goFromDrawer('/home/internal_portal/favourites')">Favourites</el-button>
-        <el-button v-if="!authStore.isAdmin" text @click="goFromDrawer('/home/internal_portal/join-us')">Join Us</el-button>
-        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/membership')">Membership Management</el-button>
-        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/users')">Site roles</el-button>
+        <el-button text @click="goFromDrawer('/home/internal_portal/join-us')">Join Us</el-button>
         <el-button text @click="exitInternalPortalFromDrawer">Public Portal</el-button>
+        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/join')">Join Us (admin)</el-button>
         <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/posts')">Publish News/Announcement/Event</el-button>
+        <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/approval')">Member Approval</el-button>
         <el-button v-if="authStore.isAdmin" text @click="goFromDrawer('/admin/audit')">Audit Logs</el-button>
       </template>
     </div>
@@ -119,25 +115,20 @@ const route = useRoute()
 const authStore = useAuthStore()
 const drawerVisible = ref(false)
 const internalPortalMode = ref(false)
-/** Source Management (file list) is admin-only; keep nav item and highlights consistent. */
+/** Storage (file list) is admin-only; keep nav item and highlights consistent. */
 const showStorageNav = computed(() => authStore.isAdmin)
 const activePath = computed(() => {
   if (internalPortalMode.value) {
-    if (route.path.startsWith('/admin/membership')) return '/admin/membership'
-    if (route.path.startsWith('/admin/users')) return '/admin/users'
     if (route.path.startsWith('/home/internal_portal/files')) {
       return showStorageNav.value ? '/home/internal_portal/files' : '/home/internal_portal/search'
     }
     if (route.path === '/home/internal_portal/search') return '/home/internal_portal/search'
-    if (route.path === '/home/internal_portal/favourites') return '/home/internal_portal/favourites'
     if (route.path === '/home/internal_portal/join-us') return '/home/internal_portal/join-us'
     if (route.path === '/home/internal_portal/home') return '/home/internal_portal/home'
     return '/home/internal_portal/home'
   } else {
     if (route.path.startsWith('/events')) return '/events'
     if (route.path.startsWith('/news')) return '/news'
-    if (route.path.startsWith('/admin/membership')) return '/admin/membership'
-    if (route.path.startsWith('/admin/users')) return '/admin/users'
     return route.path
   }
 })
@@ -193,19 +184,11 @@ async function onDrawerLogout() {
 async function handleLogout() {
   try {
     stopIdleTracking()
-    const serverOk = await authStore.doLogout()
-    if (serverOk) {
-      ElMessage.success('Logged out successfully')
-    } else {
-      ElMessage.warning(
-        'Signed out here, but the server could not be reached. If the API is down, fix it or clear site cookies later so the session is fully ended.'
-      )
-    }
+    await authStore.doLogout()
+    ElMessage.success('Logged out successfully')
     router.push('/login')
   } catch (error) {
     ElMessage.error(error?.message || 'Logout failed, please try again.')
-    authStore.clearSession()
-    router.push('/login')
   }
 }
 
@@ -284,9 +267,8 @@ watch(
   () => route.path,
   (path) => {
     if (internalPortalMode.value) {
-      const staysInInternalChrome =
-          path.startsWith('/home/internal_portal/') || path.startsWith('/admin/')
-      if (!staysInInternalChrome) {
+      const isInternalPage = path.startsWith('/home/internal_portal/')
+      if (!isInternalPage) {
         internalPortalMode.value = false
       }
     }

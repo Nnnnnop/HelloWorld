@@ -1,11 +1,13 @@
 <template>
   <div class="join-page">
+    <el-page-header @back="goBack" title="Join Us" />
+
     <el-alert
       class="intro"
       type="info"
       :closable="false"
       title="Interest groups"
-      description="Browse SIG teams that are recruiting and submit a short message. Admins review applications here; when approved you are added to the group and student accounts may be promoted to member."
+      description="Browse SIG teams that are recruiting and submit a short message. Admins review applications here; when approved you are added to the group and guest accounts may be promoted to member."
     />
 
     <el-row :gutter="16">
@@ -110,6 +112,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { csrf } from '../api/authApi'
 import {
@@ -120,6 +123,7 @@ import {
   withdrawJoinApplication
 } from '../api/joinApi'
 
+const router = useRouter()
 const authStore = useAuthStore()
 
 const loadingGroups = ref(false)
@@ -139,6 +143,10 @@ const canApply = computed(() => authStore.isLoggedIn && authStore.user?.status =
 onMounted(async () => {
   await Promise.all([loadGroups(), loadApplications(), loadMemberships()])
 })
+
+function goBack() {
+  router.push('/home/internal_portal/home')
+}
 
 async function loadGroups() {
   loadingGroups.value = true
@@ -236,7 +244,7 @@ function formatDate(v) {
 }
 
 .intro {
-  margin: 8px 0 20px;
+  margin: 16px 0 20px;
 }
 
 .block-card {

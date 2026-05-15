@@ -3,6 +3,7 @@ package com.example.polyusigwebsite.service;
 import com.example.polyusigwebsite.dto.FolderDto;
 import com.example.polyusigwebsite.entity.Folder;
 import com.example.polyusigwebsite.entity.ResourceFile;
+import com.example.polyusigwebsite.entity.ResourceVisibility;
 import com.example.polyusigwebsite.repository.FolderRepository;
 import com.example.polyusigwebsite.repository.ResourceFileRepository;
 import com.example.polyusigwebsite.search.ResourceSearchService;
@@ -38,7 +39,8 @@ public class FolderService {
         Map<Long, FolderDto> dtoById = new HashMap<>();
         for (Folder folder : all) {
             Long parentId = folder.getParent() != null ? folder.getParent().getId() : null;
-            dtoById.put(folder.getId(), new FolderDto(folder.getId(), folder.getName(), parentId, new ArrayList<>()));
+            String visibility = folder.getVisibility() != null ? folder.getVisibility().name() : ResourceVisibility.HIDDEN.name();
+            dtoById.put(folder.getId(), new FolderDto(folder.getId(), folder.getName(), parentId, visibility, new ArrayList<>()));
         }
 
         List<FolderDto> roots = new ArrayList<>();
@@ -59,13 +61,14 @@ public class FolderService {
         return roots;
     }
 
-    public FolderDto createFolder(String name, Long parentId) {
+    public FolderDto createFolder(String name, Long parentId, ResourceVisibility visibility) {
         String cleanedName = name == null ? "" : name.trim();
         if (!StringUtils.hasText(cleanedName)) {
             throw new IllegalArgumentException("Folder name cannot be empty");
         }
         Folder folder = new Folder();
         folder.setName(cleanedName);
+        folder.setVisibility(visibility != null ? visibility : ResourceVisibility.HIDDEN);
         if (parentId != null) {
             Folder parent = folderRepository.findById(parentId)
                     .orElseThrow(() -> new IllegalArgumentException("Parent folder not found"));
@@ -74,10 +77,10 @@ public class FolderService {
         Folder saved = folderRepository.save(folder);
 
         Long savedParentId = saved.getParent() != null ? saved.getParent().getId() : null;
-        return new FolderDto(saved.getId(), saved.getName(), savedParentId, List.of());
+        return new FolderDto(saved.getId(), saved.getName(), savedParentId, saved.getVisibility().name(), List.of());
     }
 
-    public FolderDto updateFolder(Long id, String name, Long parentId) {
+    public FolderDto updateFolder(Long id, String name, Long parentId, ResourceVisibility visibility) {
         Folder folder = folderRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found"));
 
@@ -87,6 +90,9 @@ public class FolderService {
         }
 
         folder.setName(cleanedName);
+        if (visibility != null) {
+            folder.setVisibility(visibility);
+        }
 
         if (parentId != null) {
             if (parentId.equals(folder.getId())) {
@@ -104,7 +110,7 @@ public class FolderService {
 
         Folder saved = folderRepository.save(folder);
         Long updatedParentId = saved.getParent() != null ? saved.getParent().getId() : null;
-        return new FolderDto(saved.getId(), saved.getName(), updatedParentId, List.of());
+        return new FolderDto(saved.getId(), saved.getName(), updatedParentId, saved.getVisibility().name(), List.of());
     }
 
     public void deleteFolder(Long id) {

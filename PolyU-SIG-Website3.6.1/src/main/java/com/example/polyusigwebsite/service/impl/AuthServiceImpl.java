@@ -3,7 +3,6 @@ package com.example.polyusigwebsite.service.impl;
 import com.example.polyusigwebsite.dto.*;
 import com.example.polyusigwebsite.entity.AuditAction;
 import com.example.polyusigwebsite.entity.PasswordResetToken;
-import com.example.polyusigwebsite.entity.MemberSiteTier;
 import com.example.polyusigwebsite.entity.RoleType;
 import com.example.polyusigwebsite.entity.UserAccount;
 import com.example.polyusigwebsite.entity.UserStatus;
@@ -65,7 +64,7 @@ public class AuthServiceImpl implements AuthService {
         user.setEmail(request.email().trim().toLowerCase());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setProvider("LOCAL");
-        user.setRole(RoleType.STUDENT);
+        user.setRole(RoleType.GUEST);
         user.setStatus(UserStatus.PENDING);
         UserAccount saved = userAccountRepository.save(user);
         auditService.record(AuditAction.REGISTER, saved.getUsername(), "New user registered and waiting for approval");
@@ -97,10 +96,7 @@ public class AuthServiceImpl implements AuthService {
 
         Object principal = authentication.getPrincipal();
         if (principal instanceof CustomUserPrincipal customUserPrincipal) {
-            /** Always reload: {@code memberSiteTier} / role updates after login must reflect on {@code /me}. */
-            return userAccountRepository.findByUsername(customUserPrincipal.getUsername())
-                    .map(UserResponse::from)
-                    .orElseGet(() -> UserResponse.from(customUserPrincipal.getUser()));
+            return UserResponse.from(customUserPrincipal.getUser());
         }
         if (principal instanceof OAuth2User oauth2User) {
             String email = oauth2User.getAttribute("email");
@@ -140,9 +136,8 @@ public class AuthServiceImpl implements AuthService {
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + request.userId()));
         if (Boolean.TRUE.equals(request.approved())) {
             user.setStatus(UserStatus.APPROVED);
-            if (user.getRole() == RoleType.STUDENT) {
+            if (user.getRole() == RoleType.GUEST) {
                 user.setRole(RoleType.MEMBER);
-                user.setMemberSiteTier(MemberSiteTier.L2);
             }
             user.setApprovedAt(LocalDateTime.now());
             auditService.record(AuditAction.APPROVE_MEMBER, adminActor, "Approved user " + user.getUsername());
@@ -156,66 +151,12 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public UserResponse updateRole(RoleUpdateRequest request, String adminActor) {
-        if (adminActor == null || adminActor.isBlank()) {
-            throw new IllegalArgumentException("Login required.");
-        }
-        UserAccount actor = userAccountRepository.findByUsername(adminActor.trim())
-                .orElseThrow(() -> new IllegalArgumentException("Admin account not found."));
-        if (actor.getRole() != RoleType.ADMIN) {
-            throw new IllegalArgumentException("Only site administrators may change roles.");
-        }
-
         UserAccount user = userAccountRepository.findById(request.userId())
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + request.userId()));
-        RoleType oldRole = user.getRole();
-        RoleType newRole = request.role();
-        if (oldRole == newRole) {
-            return UserResponse.from(user);
-        }
-
-        if (oldRole == RoleType.ADMIN && newRole != RoleType.ADMIN) {
-            if (actor.getId().equals(user.getId())) {
-                throw new IllegalArgumentException("You cannot remove your own administrator role.");
-            }
-            if (userAccountRepository.countByRole(RoleType.ADMIN) <= 1) {
-                throw new IllegalArgumentException("Cannot remove the last site administrator.");
-            }
-        }
-
-        boolean approvedForAdminGrant = false;
-        if (newRole == RoleType.ADMIN) {
-            if (user.getStatus() == UserStatus.REJECTED) {
-                throw new IllegalArgumentException("Cannot grant administrator role to a rejected account.");
-            }
-            if (user.getStatus() == UserStatus.PENDING) {
-                user.setStatus(UserStatus.APPROVED);
-                user.setApprovedAt(LocalDateTime.now());
-                approvedForAdminGrant = true;
-            }
-        }
-
-        user.setRole(newRole);
+        user.setRole(request.role());
         UserAccount saved = userAccountRepository.save(user);
-        String detail = "Changed role of " + saved.getUsername() + " from " + oldRole + " to " + newRole;
-        if (approvedForAdminGrant) {
-            detail += "; account approved as part of ADMIN grant";
-        }
-        auditService.record(AuditAction.UPDATE_ROLE, adminActor, detail);
+        auditService.record(AuditAction.UPDATE_ROLE, adminActor, "Changed role of " + saved.getUsername() + " to " + saved.getRole());
         return UserResponse.from(saved);
-    }
-
-    @Override
-    public List<UserResponse> searchUsersForRoleManagement(String query) {
-        if (query == null) {
-            return List.of();
-        }
-        String q = query.trim();
-        if (q.length() < 2) {
-            return List.of();
-        }
-        return userAccountRepository.findTop10ByUsernameContainingIgnoreCaseOrderByUsernameAsc(q).stream()
-                .map(UserResponse::from)
-                .toList();
     }
 
     @Override
@@ -257,7 +198,7 @@ public class AuthServiceImpl implements AuthService {
                     newUser.setUsername(generateUsername(displayName, email));
                     newUser.setProvider(provider == null ? "OAUTH2" : provider);
                     newUser.setProviderUserId(providerUserId);
-                    newUser.setRole(RoleType.STUDENT);
+                    newUser.setRole(RoleType.GUEST);
                     newUser.setStatus(UserStatus.PENDING);
                     return userAccountRepository.save(newUser);
                 });
@@ -277,18 +218,6 @@ public class AuthServiceImpl implements AuthService {
         }
         return userAccountRepository.findByUsername(username)
                 .map(user -> user.getStatus() == UserStatus.APPROVED
-                        && (user.getRole() == RoleType.ADMIN
-                        || (user.getRole() == RoleType.MEMBER && user.getMemberSiteTier() == MemberSiteTier.L2)))
-                .orElse(false);
-    }
-
-    @Override
-    public boolean isApprovedMember(String username) {
-        if (username == null || username.isBlank()) {
-            return false;
-        }
-        return userAccountRepository.findByUsername(username)
-                .map(user -> user.getStatus() == UserStatus.APPROVED
                         && (user.getRole() == RoleType.ADMIN || user.getRole() == RoleType.MEMBER))
                 .orElse(false);
     }
@@ -296,11 +225,11 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public RoleType roleOf(String username) {
         if (username == null || username.isBlank()) {
-            return RoleType.STUDENT;
+            return RoleType.GUEST;
         }
         return userAccountRepository.findByUsername(username)
                 .map(UserAccount::getRole)
-                .orElse(RoleType.STUDENT);
+                .orElse(RoleType.GUEST);
     }
 
     private String generateUsername(String displayName, String email) {

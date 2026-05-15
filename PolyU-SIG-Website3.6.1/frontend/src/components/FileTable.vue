@@ -24,28 +24,10 @@
             </div>
           </div>
           <div class="result-actions">
-            <el-tooltip
-              v-if="favouritesEnabled"
-              :content="isFavourite(row) ? 'Remove from favourites' : 'Add to favourites'"
-              placement="top"
-            >
-              <el-button
-                :type="isFavourite(row) ? 'warning' : 'default'"
-                plain
-                circle
-                class="favourite-icon-btn"
-                :aria-label="isFavourite(row) ? 'Remove from favourites' : 'Add to favourites'"
-                @click="$emit('toggle-favourite', row)"
-              >
-                <el-icon :size="20">
-                  <StarFilled v-if="isFavourite(row)" />
-                  <Star v-else />
-                </el-icon>
-              </el-button>
-            </el-tooltip>
-            <el-button type="info" plain @click="$emit('view', row)">View</el-button>
-            <el-button type="primary" @click="$emit('download', row)">Download</el-button>
-            <el-button v-if="editable" type="danger" plain @click="$emit('delete', row)">Delete</el-button>
+            <el-button type="text" size="small" @click="handleAction(row, 'view')">Info</el-button>
+            <el-button type="text" size="small" @click="handleAction(row, 'download')">Download</el-button>
+            <el-button type="text" size="small" v-if="editable" @click="handleAction(row, 'edit')">Edit</el-button>
+            <el-button type="text" size="small" v-if="editable" @click="handleAction(row, 'delete')">Delete</el-button>
           </div>
         </article>
       </div>
@@ -82,28 +64,14 @@
           {{ formatDate(row.uploadTime) }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" :width="editable || favouritesEnabled ? 300 : 180" fixed="right">
+      <el-table-column label="Actions" width="180" fixed="right">
         <template #default="{ row }">
-          <el-tooltip
-            v-if="favouritesEnabled"
-            :content="isFavourite(row) ? 'Remove from favourites' : 'Add to favourites'"
-            placement="top"
-          >
-            <el-button
-              link
-              class="favourite-table-btn"
-              :aria-label="isFavourite(row) ? 'Remove from favourites' : 'Add to favourites'"
-              @click="$emit('toggle-favourite', row)"
-            >
-              <el-icon :size="20" :class="{ 'favourite-star--on': isFavourite(row) }">
-                <StarFilled v-if="isFavourite(row)" />
-                <Star v-else />
-              </el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-button type="info" link @click="$emit('view', row)">View</el-button>
-          <el-button type="primary" link @click="$emit('download', row)">Download</el-button>
-          <el-button v-if="editable" type="danger" link @click="$emit('delete', row)">Delete</el-button>
+          <div class="result-actions">
+            <el-button type="text" size="small" @click="handleAction(row, 'view')">Info</el-button>
+            <el-button type="text" size="small" @click="handleAction(row, 'download')">Download</el-button>
+            <el-button type="text" size="small" v-if="editable" @click="handleAction(row, 'edit')">Edit</el-button>
+            <el-button type="text" size="small" v-if="editable" @click="handleAction(row, 'delete')">Delete</el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -111,11 +79,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { Star, StarFilled } from '@element-plus/icons-vue'
-import { visibilityLabel } from '../utils/resourceVisibility'
-
-const props = defineProps({
+defineProps({
   files: {
     type: Array,
     default: () => []
@@ -131,23 +95,21 @@ const props = defineProps({
   emptyDescription: {
     type: String,
     default: 'No files found.'
-  },
-  favouritesEnabled: {
-    type: Boolean,
-    default: false
-  },
-  favouriteIds: {
-    type: Array,
-    default: () => []
   }
 })
 
-defineEmits(['view', 'download', 'delete', 'toggle-favourite'])
+const emit = defineEmits(['view', 'download', 'delete', 'edit'])
 
-const favouriteSet = computed(() => new Set(props.favouriteIds || []))
-
-function isFavourite(row) {
-  return favouriteSet.value.has(row.id)
+function handleAction(row, command) {
+  if (command === 'view') {
+    emit('view', row)
+  } else if (command === 'download') {
+    emit('download', row)
+  } else if (command === 'edit') {
+    emit('edit', row)
+  } else if (command === 'delete') {
+    emit('delete', row)
+  }
 }
 
 function formatSize(size) {
@@ -202,6 +164,14 @@ function formatFileType(row) {
   }
 
   return mimeToExt[mimeType] || '-'
+}
+
+function visibilityLabel(visibility) {
+  if (visibility === 'PUBLIC') return 'Public'
+  if (visibility === 'L1') return 'Member: Level 1'
+  if (visibility === 'L2') return 'Member: Level 2'
+  if (visibility === 'HIDDEN') return 'HIDDEN'
+  return String(visibility || '-').toUpperCase()
 }
 </script>
 
@@ -276,20 +246,6 @@ function formatFileType(row) {
   flex-direction: column;
   gap: 8px;
   justify-content: center;
-}
-
-.favourite-icon-btn {
-  padding: 8px;
-}
-
-.favourite-table-btn {
-  padding: 4px 6px;
-  margin-right: 4px;
-  vertical-align: middle;
-}
-
-.favourite-star--on {
-  color: #e6a23c;
 }
 
 @media (max-width: 768px) {

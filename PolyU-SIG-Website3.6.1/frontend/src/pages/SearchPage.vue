@@ -54,28 +54,6 @@
             <el-form-item label="Uploader">
               <el-input v-model="form.uploader" placeholder="Enter username" clearable @keyup.enter="onSearch" />
             </el-form-item>
-            <el-form-item label="Upload date from">
-              <el-date-picker
-                v-model="form.uploadDateFrom"
-                type="date"
-                placeholder="Start date"
-                clearable
-                format="YYYY-MM-DD"
-                value-format="YYYY-MM-DD"
-                class="filter-date"
-              />
-            </el-form-item>
-            <el-form-item label="Upload date to">
-              <el-date-picker
-                v-model="form.uploadDateTo"
-                type="date"
-                placeholder="End date"
-                clearable
-                format="YYYY-MM-DD"
-                value-format="YYYY-MM-DD"
-                class="filter-date"
-              />
-            </el-form-item>
             <div class="filter-actions">
               <el-button type="primary" plain :loading="loading" @click="onSearch">Apply Filters</el-button>
               <el-button @click="clearFilters">Reset Filters</el-button>
@@ -131,11 +109,8 @@
             :files="files"
             :mode="viewMode"
             :empty-description="emptyDescription"
-            :favourites-enabled="true"
-            :favourite-ids="favouriteIds"
             @view="onView"
             @download="onDownload"
-            @toggle-favourite="onToggleFavourite"
           />
         </el-card>
       </el-col>
@@ -149,9 +124,7 @@ import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import FileTable from '../components/FileTable.vue'
 import { downloadFile, searchFiles } from '../api/fileApi'
-import { addFavourite, listFavouriteIds, removeFavourite } from '../api/favouriteApi'
 import { useAuthStore } from '../stores/auth'
-import { previewBlockedReason } from '../utils/resourceVisibility'
 
 const route = useRoute()
 const router = useRouter()
@@ -161,9 +134,7 @@ const form = reactive({
   keyword: '',
   fileType: '',
   category: '',
-  uploader: '',
-  uploadDateFrom: '',
-  uploadDateTo: ''
+  uploader: ''
 })
 const quickCategories = ['notice', 'report', 'code', 'self-study']
 const viewMode = ref('list')
@@ -173,13 +144,6 @@ const searched = ref(false)
 const errorMessage = ref('')
 const suggestion = ref('')
 const syncingRoute = ref(false)
-const favouriteIds = ref([])
-
-const isInternalPortal = computed(() => route.path.startsWith('/home/internal_portal'))
-const searchRouteName = computed(() => (isInternalPortal.value ? 'internal-search' : 'search'))
-const fileDetailRouteName = computed(() =>
-  isInternalPortal.value ? 'internal-file-detail' : 'file-detail'
-)
 
 watch(
   () => route.query,
@@ -203,8 +167,6 @@ async function applyRouteState() {
   form.fileType = queryValue('fileType')
   form.category = queryValue('category')
   form.uploader = queryValue('uploader')
-  form.uploadDateFrom = queryValue('uploadDateFrom')
-  form.uploadDateTo = queryValue('uploadDateTo')
   viewMode.value = queryValue('view') === 'table' ? 'table' : 'list'
 
   if (hasAnySearchInput()) {
@@ -227,9 +189,7 @@ function hasAnySearchInput() {
     form.keyword.trim() ||
     form.fileType.trim() ||
     form.category.trim() ||
-    form.uploader.trim() ||
-    form.uploadDateFrom ||
-    form.uploadDateTo
+    form.uploader.trim()
   )
 }
 
@@ -239,8 +199,6 @@ function buildRouteQuery() {
   if (form.fileType.trim()) next.fileType = form.fileType.trim()
   if (form.category.trim()) next.category = form.category.trim()
   if (form.uploader.trim()) next.uploader = form.uploader.trim()
-  if (form.uploadDateFrom) next.uploadDateFrom = form.uploadDateFrom
-  if (form.uploadDateTo) next.uploadDateTo = form.uploadDateTo
   if (viewMode.value === 'table') next.view = 'table'
   return next
 }
@@ -248,7 +206,7 @@ function buildRouteQuery() {
 async function updateRouteQuery() {
   syncingRoute.value = true
   try {
-    await router.push({ name: searchRouteName.value, query: buildRouteQuery() })
+    await router.push({ name: 'search', query: buildRouteQuery() })
   } finally {
     syncingRoute.value = false
   }
@@ -265,10 +223,8 @@ async function runSearch(syncRoute = true) {
     const payload = await searchFiles(form)
     files.value = payload?.items || []
     suggestion.value = payload?.suggestion || ''
-    await refreshFavouriteIds()
   } catch (error) {
     files.value = []
-    favouriteIds.value = []
     errorMessage.value = error?.message || 'Search failed, please try again later.'
     suggestion.value = ''
   } finally {
@@ -280,13 +236,6 @@ async function onSearch() {
   const keyword = form.keyword.trim()
   if (keyword && Array.from(keyword).length < 2) {
     errorMessage.value = 'Keyword must contain at least 2 characters.'
-    files.value = []
-    searched.value = false
-    suggestion.value = ''
-    return
-  }
-  if (form.uploadDateFrom && form.uploadDateTo && form.uploadDateFrom > form.uploadDateTo) {
-    errorMessage.value = '"Upload date from" must be on or before "Upload date to".'
     files.value = []
     searched.value = false
     suggestion.value = ''
@@ -304,8 +253,6 @@ async function onReset() {
   form.fileType = ''
   form.category = ''
   form.uploader = ''
-  form.uploadDateFrom = ''
-  form.uploadDateTo = ''
   viewMode.value = 'list'
   files.value = []
   searched.value = false
@@ -313,7 +260,7 @@ async function onReset() {
   suggestion.value = ''
   syncingRoute.value = true
   try {
-    await router.push({ name: searchRouteName.value, query: {} })
+    await router.push({ name: 'search', query: {} })
   } finally {
     syncingRoute.value = false
   }
@@ -323,8 +270,6 @@ function clearFilters() {
   form.fileType = ''
   form.category = ''
   form.uploader = ''
-  form.uploadDateFrom = ''
-  form.uploadDateTo = ''
 }
 
 async function applyQuickCategory(category) {
@@ -342,43 +287,15 @@ function onDownload(row) {
 }
 
 async function onView(row) {
-  const blocked = previewBlockedReason(authStore, row.visibility)
-  if (blocked) {
-    ElMessage.warning(blocked)
+  if (row.visibility === 'L2' && !authStore.isMember && !authStore.isAdmin) {
+    ElMessage.warning('This resource is member-only (approved members/admins).')
     return
   }
   router.push({
-    name: fileDetailRouteName.value,
+    name: 'file-detail',
     params: { id: row.id },
     query: form.keyword ? { keyword: form.keyword.trim() } : {}
   })
-}
-
-async function refreshFavouriteIds() {
-  try {
-    const ids = await listFavouriteIds()
-    favouriteIds.value = Array.isArray(ids) ? ids : []
-  } catch {
-    favouriteIds.value = []
-  }
-}
-
-async function onToggleFavourite(row) {
-  const id = row.id
-  const isFav = favouriteIds.value.includes(id)
-  try {
-    if (isFav) {
-      await removeFavourite(id)
-      favouriteIds.value = favouriteIds.value.filter((x) => x !== id)
-      ElMessage.success('Removed from favourites')
-    } else {
-      await addFavourite(id)
-      favouriteIds.value = [...favouriteIds.value, id]
-      ElMessage.success('Added to favourites')
-    }
-  } catch (error) {
-    ElMessage.error(error?.message || 'Could not update favourites.')
-  }
 }
 </script>
 
@@ -434,10 +351,6 @@ async function onToggleFavourite(row) {
 .filter-actions {
   display: flex;
   gap: 8px;
-}
-
-.filter-date {
-  width: 100%;
 }
 
 .result-header {

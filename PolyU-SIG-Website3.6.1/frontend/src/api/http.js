@@ -23,26 +23,18 @@ export async function request(url, options = {}) {
       (/failed to fetch|networkerror|load failed/i.test(msg) || msg === '')
     ) {
       throw new Error(
-        'Network error: API unreachable. If you use Docker, confirm `app` is running and nginx proxies /api (e.g. /api/auth/) to the backend. Disable extensions that block API routes or try another browser tab.'
+        'Network error: API unreachable. If you use Docker, confirm `app` is running and nginx proxies /api to the backend. Disable extensions that block `/api/admin/` or try another browser tab.'
       )
     }
     throw e
   }
 
   if (!response.ok) {
-    const ct = response.headers.get('content-type') || ''
     let message = `Request failed (${response.status})`
     try {
-      if (ct.includes('application/json')) {
-        const body = await response.json()
-        if (body?.message) {
-          message = body.message
-        }
-      } else {
-        const text = (await response.text()).trim()
-        if (text) {
-          message = `${message}: ${text.slice(0, 240)}`
-        }
+      const body = await response.json()
+      if (body?.message) {
+        message = body.message
       }
     } catch {
       // ignore parsing errors

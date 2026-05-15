@@ -454,7 +454,7 @@ async function beforeNewsImageUpload(rawFile) {
       description: `Image for news post: ${form.title.trim() || 'Untitled'}`,
       category: 'News',
       tags: 'news-image',
-      visibility: 'L1'
+      visibility: 'PUBLIC'
     })
     const imageId = Number(result?.id)
     if (!Number.isInteger(imageId) || imageId <= 0) {

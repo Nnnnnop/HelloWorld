@@ -35,14 +35,12 @@
       <el-form-item label="Visibility">
         <el-radio-group v-model="form.visibility">
           <el-radio-button label="HIDDEN">HIDDEN</el-radio-button>
-          <el-radio-button label="L1">Public</el-radio-button>
-          <el-radio-button label="L2">Member: Level1</el-radio-button>
-          <el-radio-button label="L3">Member: Level2</el-radio-button>
+          <el-radio-button label="PUBLIC">Public</el-radio-button>
+          <el-radio-button label="L1">Member: Level 1</el-radio-button>
+          <el-radio-button label="L2">Member: Level 2</el-radio-button>
         </el-radio-group>
         <div class="visibility-tip">
-          HIDDEN: uploader &amp; admins. Public: everyone (including not logged in) can discover in Search. Member: Level1: approved SIG
-          members (Level 1 or 2 and admins). Member: Level2: admins and approved members whose site tier is Level 2 (adjustable under
-          Membership Management).
+          All levels require login. HIDDEN = uploader only, Public = any logged-in PolyU user, Member: Level 1/2 = approved members/admins only.
         </div>
       </el-form-item>
     </el-form>
@@ -67,6 +65,7 @@
       <el-button type="primary" :loading="loading" @click="submitUpload">Upload</el-button>
       <el-button @click="clearFile">Clear</el-button>
     </div>
+    <el-progress v-if="loading || uploadProgress > 0" :percentage="uploadProgress" :text-inside="true" status="active" style="margin-top: 16px;" />
   </el-card>
 </template>
 
@@ -82,6 +81,7 @@ import { useAuthStore } from '../stores/auth'
 const uploadRef = ref()
 const selectedFile = ref(null)
 const loading = ref(false)
+const uploadProgress = ref(0)
 const router = useRouter()
 const authStore = useAuthStore()
 const folders = ref([])
@@ -131,6 +131,7 @@ function onExceed() {
 function clearFile() {
   selectedFile.value = null
   uploadRef.value?.clearFiles()
+  uploadProgress.value = 0
 }
 
 async function submitUpload() {
@@ -160,7 +161,9 @@ async function submitUpload() {
 
   loading.value = true
   try {
-    await uploadFile(selectedFile.value, form)
+    await uploadFile(selectedFile.value, form, (percent) => {
+      uploadProgress.value = percent
+    })
     ElMessage.success('Upload successful')
     clearFile()
     form.title = ''
@@ -172,6 +175,7 @@ async function submitUpload() {
     ElMessage.error(error.message)
   } finally {
     loading.value = false
+    uploadProgress.value = 0
   }
 }
 

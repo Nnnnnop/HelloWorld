@@ -10,6 +10,7 @@ public record InterestGroupResponse(
         String description,
         boolean recruiting,
         boolean active,
+        int sortOrder,
         LocalDateTime createdAt
 ) {
     public static InterestGroupResponse from(InterestGroup g) {
@@ -19,6 +20,7 @@ public record InterestGroupResponse(
                 g.getDescription(),
                 g.isRecruiting(),
                 g.isActive(),
+                g.getSortOrder(),
                 g.getCreatedAt()
         );
     }

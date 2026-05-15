@@ -7,5 +7,6 @@ public record InterestGroupAdminRequest(
         @NotBlank @Size(max = 120) String name,
         @Size(max = 4000) String description,
         boolean recruiting,
-        boolean active
+        boolean active,
+        int sortOrder
 ) {}

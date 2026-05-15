@@ -23,8 +23,6 @@ import InternalPortalPage from '../pages/InternalPortalPage.vue'
 import PublicPortalPage from '../pages/PublicPortalPage.vue'
 import JoinUsPage from '../pages/JoinUsPage.vue'
 import AdminJoinPage from '../pages/AdminJoinPage.vue'
-import AdminUsersPage from '../pages/AdminUsersPage.vue'
-import FavouritesPage from '../pages/FavouritesPage.vue'
 
 const routes = [
   { path: '/', redirect: '/home' },
@@ -42,12 +40,6 @@ const routes = [
   { path: '/home/internal_portal/files', name: 'internal-files', component: FileListPage, meta: { adminOnly: true } },
   { path: '/home/internal_portal/files/:id', name: 'internal-file-detail', component: FileDetailPage, meta: { requireAuth: true } },
   { path: '/home/internal_portal/search', name: 'internal-search', component: SearchPage, meta: { requireAuth: true } },
-  {
-    path: '/home/internal_portal/favourites',
-    name: 'internal-favourites',
-    component: FavouritesPage,
-    meta: { requireAuth: true }
-  },
   {
     path: '/home/internal_portal/join-us',
     name: 'internal-join-us',
@@ -85,15 +77,8 @@ const routes = [
     meta: { adminOnly: true }
   },
   { path: '/admin/approval', name: 'admin-approval', component: AdminApprovalPage, meta: { adminOnly: true } },
-  { path: '/admin/users', name: 'admin-users', component: AdminUsersPage, meta: { adminOnly: true } },
   { path: '/admin/audit', name: 'admin-audit', component: AdminAuditPage, meta: { adminOnly: true } },
-  {
-    path: '/admin/membership',
-    name: 'admin-membership',
-    component: AdminJoinPage,
-    meta: { adminOnly: true }
-  },
-  { path: '/admin/join', redirect: '/admin/membership' }
+  { path: '/admin/join', name: 'admin-join', component: AdminJoinPage, meta: { adminOnly: true } }
 ]
 
 const router = createRouter({
@@ -122,10 +107,6 @@ router.beforeEach(async (to) => {
     if (!authStore.isAdmin) {
       return to.path.startsWith('/home/internal_portal') ? '/home/internal_portal/search' : '/search'
     }
-  }
-
-  if (to.name === 'internal-join-us' && authStore.isAdmin) {
-    return '/home/internal_portal/home'
   }
 
   return true

@@ -30,6 +30,9 @@ public class InterestGroup {
     @Column(nullable = false)
     private boolean active = true;
 
+    @Column(name = "sort_order", nullable = false)
+    private int sortOrder;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -78,6 +81,14 @@ public class InterestGroup {
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public int getSortOrder() {
+        return sortOrder;
+    }
+
+    public void setSortOrder(int sortOrder) {
+        this.sortOrder = sortOrder;
     }
 
     public LocalDateTime getCreatedAt() {

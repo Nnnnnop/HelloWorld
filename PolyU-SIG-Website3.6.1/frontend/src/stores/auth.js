@@ -8,7 +8,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: (state) => !!state.user,
-    role: (state) => state.user?.role || 'STUDENT',
+    role: (state) => state.user?.role || 'GUEST',
     isAdmin: (state) => state.user?.role === 'ADMIN',
     isMember: (state) => ['MEMBER', 'ADMIN'].includes(state.user?.role),
     isApproved: (state) => state.user?.status === 'APPROVED'
@@ -43,16 +43,23 @@ export const useAuthStore = defineStore('auth', {
     async doLogout() {
       // Ensure CSRF cookie exists for logout POST.
       await csrf().catch(() => {})
-      let serverLogoutOk = true
       try {
         await logout()
       } catch (error) {
-        serverLogoutOk = false
-        console.warn('[auth] Logout API failed; clearing client session:', error?.message)
+        const message = error?.message || ''
+        // If network is unavailable or session is already invalid on server,
+        // still clear client state to avoid trapping user in UI.
+        if (
+          !message.includes('Failed to fetch') &&
+          !message.includes('NetworkError') &&
+          !message.includes('(401)') &&
+          !message.includes('(403)')
+        ) {
+          throw error
+        }
       } finally {
         this.user = null
       }
-      return serverLogoutOk
     },
     clearSession() {
       this.user = null
