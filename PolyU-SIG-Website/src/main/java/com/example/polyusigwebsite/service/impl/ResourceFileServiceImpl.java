@@ -1,33 +1,38 @@
 package com.example.polyusigwebsite.service.impl;
 
-import com.example.polyusigwebsite.dto.ArchiveContentsResponse;
-import com.example.polyusigwebsite.dto.ArchiveEntryResponse;
 import com.example.polyusigwebsite.dto.BulkFolderUploadManifest;
 import com.example.polyusigwebsite.dto.ResourceFileResponse;
 import com.example.polyusigwebsite.dto.ResourceSearchRequest;
 import com.example.polyusigwebsite.dto.ResourceSearchResponse;
 import com.example.polyusigwebsite.dto.ResourceUpdateRequest;
 import com.example.polyusigwebsite.dto.ResourceUploadRequest;
+import com.example.polyusigwebsite.dto.InitializeUploadRequest;
+import com.example.polyusigwebsite.dto.UploadFileRequest;
+import com.example.polyusigwebsite.dto.UploadSessionResponse;
+import com.example.polyusigwebsite.dto.UploadTaskResponse;
 import com.example.polyusigwebsite.entity.Folder;
 import com.example.polyusigwebsite.entity.ResourceFile;
 import com.example.polyusigwebsite.entity.ResourceVisibility;
-import com.example.polyusigwebsite.entity.RoleType;
 import com.example.polyusigwebsite.entity.UserAccount;
-import com.example.polyusigwebsite.entity.UserResourceFavourite;
 import com.example.polyusigwebsite.entity.AuditAction;
+import com.example.polyusigwebsite.entity.UploadSession;
+import com.example.polyusigwebsite.entity.UploadSessionStatus;
+import com.example.polyusigwebsite.entity.UploadTaskRecord;
+import com.example.polyusigwebsite.entity.UploadTaskStatus;
 import com.example.polyusigwebsite.repository.FolderRepository;
 import com.example.polyusigwebsite.exception.ResourceFileNotFoundException;
 import com.example.polyusigwebsite.repository.ResourceFileRepository;
-import com.example.polyusigwebsite.repository.UserResourceFavouriteRepository;
 import com.example.polyusigwebsite.repository.UserAccountRepository;
+import com.example.polyusigwebsite.repository.UploadTaskRecordRepository;
 import com.example.polyusigwebsite.search.ResourceSearchService;
 import com.example.polyusigwebsite.service.AuditService;
 import com.example.polyusigwebsite.service.AuthService;
 import com.example.polyusigwebsite.service.DocumentPreviewService;
 import com.example.polyusigwebsite.service.FileContentExtractor;
 import com.example.polyusigwebsite.service.ResourceFileService;
+import com.example.polyusigwebsite.service.UploadQueueManager;
+import com.example.polyusigwebsite.service.ChunkedUploadService;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
@@ -35,28 +40,20 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.MalformedURLException;
-import java.time.LocalDate;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.Locale;
 import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,49 +61,63 @@ import org.slf4j.LoggerFactory;
 public class ResourceFileServiceImpl implements ResourceFileService {
     private static final Logger log = LoggerFactory.getLogger(ResourceFileServiceImpl.class);
 
-    private static final int ZIP_ARCHIVE_LIST_MAX_ENTRIES = 3000;
-
-    private static final long ZIP_ENTRY_PREVIEW_MAX_BYTES = 15L * 1024 * 1024;
-
     private final ResourceFileRepository resourceFileRepository;
     private final FolderRepository folderRepository;
-    private final UserResourceFavouriteRepository userResourceFavouriteRepository;
     private final UserAccountRepository userAccountRepository;
     private final AuthService authService;
     private final AuditService auditService;
     private final ResourceSearchService resourceSearchService;
     private final FileContentExtractor fileContentExtractor;
     private final DocumentPreviewService documentPreviewService;
+    private final UploadQueueManager uploadQueueManager;
+    private final ChunkedUploadService chunkedUploadService;
+    private final UploadTaskRecordRepository uploadTaskRecordRepository;
     private final Path uploadDir;
     private final List<String> allowedExtensions;
 
     public ResourceFileServiceImpl(
             ResourceFileRepository resourceFileRepository,
             FolderRepository folderRepository,
-            UserResourceFavouriteRepository userResourceFavouriteRepository,
             UserAccountRepository userAccountRepository,
             AuthService authService,
             AuditService auditService,
             ResourceSearchService resourceSearchService,
             FileContentExtractor fileContentExtractor,
             DocumentPreviewService documentPreviewService,
+            UploadQueueManager uploadQueueManager,
+            ChunkedUploadService chunkedUploadService,
+            UploadTaskRecordRepository uploadTaskRecordRepository,
             @Value("${app.upload-dir:files}") String uploadDir,
             @Value("${sig.security.allowed-file-types:pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,gif,webp,bmp,svg,java,py,c,cpp,js,ts,r,m,go,rs,txt,md,json,xml,yaml,yml,sql,csv,ipynb,zip,rar,7z,tar,gz}") String allowedFileTypes
     ) throws IOException {
         this.resourceFileRepository = resourceFileRepository;
         this.folderRepository = folderRepository;
-        this.userResourceFavouriteRepository = userResourceFavouriteRepository;
         this.userAccountRepository = userAccountRepository;
         this.authService = authService;
         this.auditService = auditService;
         this.resourceSearchService = resourceSearchService;
         this.fileContentExtractor = fileContentExtractor;
         this.documentPreviewService = documentPreviewService;
+        this.uploadQueueManager = uploadQueueManager;
+        this.chunkedUploadService = chunkedUploadService;
+        this.uploadTaskRecordRepository = uploadTaskRecordRepository;
         this.uploadDir = Paths.get(uploadDir).toAbsolutePath().normalize();
         Files.createDirectories(this.uploadDir);
         this.allowedExtensions = List.of(allowedFileTypes.split(","))
                 .stream().map(String::trim).filter(s -> !s.isBlank()).map(String::toLowerCase).toList();
         log.info("Allowed file extensions loaded: {}", this.allowedExtensions);
+    }
+
+    private void verifyStorageFile(Path targetPath, String originalName) {
+        if (!Files.exists(targetPath) || !Files.isRegularFile(targetPath)) {
+            throw new IllegalStateException("Uploaded file not found in storage volume: " + originalName);
+        }
+        try {
+            long size = Files.size(targetPath);
+            log.debug("Verified uploaded file '{}' exists with {} bytes", originalName, size);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to verify stored file: " + originalName, ex);
+        }
     }
 
     @Override
@@ -124,6 +135,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to store file: " + originalName, ex);
         }
+        verifyStorageFile(targetPath, originalName);
 
         ResourceFile resourceFile = new ResourceFile();
         resourceFile.setTitle(metadata.title());
@@ -138,7 +150,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         resourceFile.setFilePath(targetPath.toString());
         resourceFile.setUploader(requireActor(actor));
         resourceFile.setFolder(requireFolder(metadata.folderId()));
-        String extractedContent = fileContentExtractor.extractForIndexing(targetPath, originalName);
+        String extractedContent = fileContentExtractor.extract(targetPath, originalName);
         resourceFile.setContentText(extractedContent);
 
         ResourceFile saved = resourceFileRepository.save(resourceFile);
@@ -187,6 +199,15 @@ public class ResourceFileServiceImpl implements ResourceFileService {
             }
         }
 
+        Map<String, BulkFolderUploadManifest.FolderNode> manifestFolderByTempId = new HashMap<>();
+        if (manifest.folders() != null) {
+            for (BulkFolderUploadManifest.FolderNode node : manifest.folders()) {
+                manifestFolderByTempId.put(node.tempId(), node);
+            }
+        }
+
+        Map<String, Integer> filesPerTopLevelFolder = new HashMap<>();
+
         // Process files in separate transactions to avoid resource exhaustion
         for (BulkFolderUploadManifest.FileNode fn : manifest.files()) {
             String clientPath = normalizeClientPath(fn.clientPath());
@@ -202,10 +223,36 @@ public class ResourceFileServiceImpl implements ResourceFileService {
 
             try {
                 uploadBulkFileInOwnTransaction(part, fn, folder, actor);
+
+                String topLevelTempId = fn.folderTempId();
+                while (topLevelTempId != null && !"ROOT".equals(topLevelTempId)) {
+                    BulkFolderUploadManifest.FolderNode current = manifestFolderByTempId.get(topLevelTempId);
+                    if (current == null || current.parentTempId() == null || "ROOT".equals(current.parentTempId())) {
+                        break;
+                    }
+                    topLevelTempId = current.parentTempId();
+                }
+
+                String topLevelName = "Root";
+                if (topLevelTempId != null && !"ROOT".equals(topLevelTempId)) {
+                    BulkFolderUploadManifest.FolderNode topLevelNode = manifestFolderByTempId.get(topLevelTempId);
+                    if (topLevelNode != null) {
+                        topLevelName = topLevelNode.name();
+                    }
+                }
+
+                filesPerTopLevelFolder.put(topLevelName, filesPerTopLevelFolder.getOrDefault(topLevelName, 0) + 1);
             } catch (Exception ex) {
                 log.error("Failed to upload file '{}': {}", part.getOriginalFilename(), ex.getMessage(), ex);
                 // Continue with next file instead of failing the entire batch
             }
+        }
+
+        for (Map.Entry<String, Integer> entry : filesPerTopLevelFolder.entrySet()) {
+            String folderName = entry.getKey();
+            int fileCount = entry.getValue();
+            String message = String.format("Uploaded folder %s with %d file%s", folderName, fileCount, fileCount == 1 ? "" : "s");
+            auditService.record(AuditAction.UPLOAD_RESOURCE, actor, message);
         }
     }
 
@@ -215,7 +262,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
                 ? fn.displayName().trim()
                 : StringUtils.cleanPath(part.getOriginalFilename());
         String safeName = safeFileName(requestedName);
-        ResourceVisibility visibility = fn.minAccessLevel() != null ? fn.minAccessLevel() : ResourceVisibility.L1;
+        ResourceVisibility visibility = fn.minAccessLevel() != null ? fn.minAccessLevel() : ResourceVisibility.PUBLIC;
 
         Path folderPath = uploadDir.resolve(folderRelativePath(folder));
         Files.createDirectories(folderPath);
@@ -227,6 +274,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         try (var inputStream = part.getInputStream()) {
             Files.copy(inputStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
         }
+        verifyStorageFile(targetPath, safeName);
 
         ResourceFile resourceFile = new ResourceFile();
         resourceFile.setTitle(safeName);
@@ -242,7 +290,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         resourceFile.setFilePath(targetPath.toString());
         resourceFile.setUploader(requireActor(actor));
         resourceFile.setFolder(folder);
-        String extractedContent = fileContentExtractor.extractForIndexing(targetPath, safeName);
+        String extractedContent = fileContentExtractor.extract(targetPath, safeName);
         resourceFile.setContentText(extractedContent);
 
         ResourceFile saved = resourceFileRepository.save(resourceFile);
@@ -251,7 +299,7 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         } catch (Exception ex) {
             log.warn("Failed to index resource {} to Elasticsearch: {}", saved.getId(), ex.getMessage());
         }
-        auditService.record(AuditAction.UPLOAD_RESOURCE, actor, "Bulk uploaded resource #" + saved.getId() + " (" + saved.getTitle() + ")");
+        // Audit logging is now handled at the folder level in uploadBulk method
     }
 
     @Override
@@ -276,12 +324,57 @@ public class ResourceFileServiceImpl implements ResourceFileService {
                 .toList();
 
         java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        java.util.Set<String> usedEntryNames = new java.util.HashSet<>();
         try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(baos)) {
             for (ResourceFile file : files) {
                 Path filePath = Paths.get(file.getFilePath());
                 if (java.nio.file.Files.exists(filePath)) {
+                    Path folderPath = folderRelativePath(file.getFolder());
+
                     String filename = buildDownloadName(file);
-                    zos.putNextEntry(new java.util.zip.ZipEntry(filename));
+
+                    // normalize spaces and slashes safely
+                    String normalizedFolder =
+                            folderPath == null
+                                    ? ""
+                                    : folderPath.toString()
+                                        .replace("\\", "/")
+                                        .replaceAll("/+", "/")
+                                        .trim();
+
+                    String zipEntryName =
+                            normalizedFolder.isBlank()
+                                    ? filename
+                                    : normalizedFolder + "/" + filename;
+
+                    // ensure unique entry names
+                    String finalZipEntryName = zipEntryName;
+
+                    if (usedEntryNames.contains(finalZipEntryName)) {
+                        String ext = extractExtension(filename);
+
+                        String base =
+                                ext.isEmpty()
+                                        ? filename
+                                        : filename.substring(0, filename.length() - ext.length());
+
+                        finalZipEntryName =
+                                (normalizedFolder.isBlank()
+                                        ? ""
+                                        : normalizedFolder + "/")
+                                + base
+                                + "_"
+                                + file.getId()
+                                + ext;
+                    }
+
+                    usedEntryNames.add(finalZipEntryName);
+
+                    zos.putNextEntry(new java.util.zip.ZipEntry(finalZipEntryName));
+                    if (!java.nio.file.Files.isRegularFile(filePath)) {
+                        continue;
+                    }
+
                     java.nio.file.Files.copy(filePath, zos);
                     zos.closeEntry();
                 }
@@ -292,6 +385,58 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         org.springframework.core.io.ByteArrayResource resource = new org.springframework.core.io.ByteArrayResource(zipBytes);
         auditService.record(AuditAction.DOWNLOAD_RESOURCE, actor, "Downloaded zip with " + ids.size() + " files");
         return new ResourceDownload("selected-files.zip", resource, "application/zip");
+    }
+
+    @Override
+    @Transactional
+    public ResourceDownload downloadFolder(Long folderId, String actor) throws IOException {
+        Folder folder = folderRepository.findById(folderId)
+                .orElseThrow(() -> new IllegalArgumentException("Folder not found: " + folderId));
+
+        List<Long> folderIds = collectFolderIds(folder);
+        List<ResourceFile> files = new java.util.ArrayList<>();
+        for (Long id : folderIds) {
+            files.addAll(resourceFileRepository.findByFolderId(id));
+        }
+
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(baos)) {
+            Path rootFolderPath = Paths.get(safePathSegment(folder.getName()));
+            Path baseFolderPath = folderRelativePath(folder);
+            java.util.Set<String> addedEntries = new java.util.LinkedHashSet<>();
+
+            // Add all folder entries first so empty folders are preserved in the zip
+            List<Folder> folders = folderRepository.findAllById(folderIds);
+            for (Folder nestedFolder : folders) {
+                Path nestedFolderPath = folderRelativePath(nestedFolder);
+                Path relativePath = baseFolderPath.relativize(nestedFolderPath);
+                Path entryPath = rootFolderPath.resolve(relativePath);
+                String zipEntryName = entryPath.toString().replace('\\', '/') + "/";
+                if (addedEntries.add(zipEntryName)) {
+                    zos.putNextEntry(new java.util.zip.ZipEntry(zipEntryName));
+                    zos.closeEntry();
+                }
+            }
+
+            for (ResourceFile file : files) {
+                assertCanAccess(file, actor);
+                Path fileFolderPath = folderRelativePath(file.getFolder());
+                Path relativePath = baseFolderPath.relativize(fileFolderPath);
+                Path entryPath = rootFolderPath.resolve(relativePath).resolve(buildDownloadName(file));
+                String zipEntryName = entryPath.toString().replace('\\', '/');
+                if (addedEntries.add(zipEntryName)) {
+                    zos.putNextEntry(new java.util.zip.ZipEntry(zipEntryName));
+                    java.nio.file.Files.copy(Paths.get(file.getFilePath()), zos);
+                    zos.closeEntry();
+                }
+            }
+        }
+
+        byte[] zipBytes = baos.toByteArray();
+        org.springframework.core.io.ByteArrayResource resource = new org.springframework.core.io.ByteArrayResource(zipBytes);
+        auditService.record(AuditAction.DOWNLOAD_RESOURCE, actor, "Downloaded folder zip: " + folder.getName());
+        String downloadName = safePathSegment(folder.getName()) + ".zip";
+        return new ResourceDownload(downloadName, resource, "application/zip");
     }
 
     @Override
@@ -317,188 +462,6 @@ public class ResourceFileServiceImpl implements ResourceFileService {
 
     @Override
     @Transactional(readOnly = true)
-    public ArchiveContentsResponse listArchiveContents(Long id, String actor) {
-        ResourceFile resourceFile = resourceFileRepository.findById(id)
-                .orElseThrow(() -> new ResourceFileNotFoundException(id));
-        assertCanAccess(resourceFile, actor);
-        String fileName = resourceFile.getFileName();
-        String ext = extractExtension(fileName == null ? "" : fileName).replace(".", "").toLowerCase();
-        if (fileName == null || !"zip".equals(ext)) {
-            throw new IllegalArgumentException("Archive listing is only available for .zip files.");
-        }
-        Path diskPath = Paths.get(resourceFile.getFilePath());
-        if (!Files.isRegularFile(diskPath)) {
-            throw new IllegalArgumentException("Stored file is missing on disk.");
-        }
-
-        try (ZipFile zf = new ZipFile(diskPath.toFile(), StandardCharsets.UTF_8)) {
-            List<ZipEntry> sorted = zf.stream()
-                    .filter(ze -> isSafeZipEntryPath(ze.getName()))
-                    .filter(ze -> !ze.getName().startsWith("__MACOSX/"))
-                    .sorted(Comparator.comparing(ZipEntry::getName))
-                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-
-            boolean truncated = sorted.size() > ZIP_ARCHIVE_LIST_MAX_ENTRIES;
-            List<ArchiveEntryResponse> entries = new ArrayList<>(Math.min(sorted.size(), ZIP_ARCHIVE_LIST_MAX_ENTRIES));
-            int limit = Math.min(sorted.size(), ZIP_ARCHIVE_LIST_MAX_ENTRIES);
-            for (int i = 0; i < limit; i++) {
-                ZipEntry ze = sorted.get(i);
-                String rawName = ze.getName();
-                boolean dir = ze.isDirectory() || rawName.endsWith("/");
-                String pathStr = rawName;
-                if (dir && pathStr.endsWith("/")) {
-                    pathStr = pathStr.substring(0, pathStr.length() - 1);
-                }
-                long size = 0L;
-                if (!dir) {
-                    long u = ze.getSize();
-                    if (u < 0) {
-                        u = ze.getCompressedSize();
-                    }
-                    size = u >= 0 ? u : 0L;
-                }
-                entries.add(new ArchiveEntryResponse(pathStr, size, dir));
-            }
-            return new ArchiveContentsResponse(entries, truncated, entries.size());
-        } catch (IOException ex) {
-            log.warn("Failed to read ZIP resource id={}: {}", id, ex.getMessage());
-            throw new IllegalArgumentException("Could not read ZIP file (invalid or corrupted archive).");
-        }
-    }
-
-    private static boolean isSafeZipEntryPath(String name) {
-        if (name == null || name.isBlank()) {
-            return false;
-        }
-        if (name.contains("..")) {
-            return false;
-        }
-        if (name.startsWith("/") || name.startsWith("\\")) {
-            return false;
-        }
-        for (String seg : name.split("/")) {
-            if ("..".equals(seg)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public ResourceDownload streamArchiveEntry(Long id, String entryPath, String actor) {
-        ResourceFile zipRf = resourceFileRepository.findById(id)
-                .orElseThrow(() -> new ResourceFileNotFoundException(id));
-        assertCanAccess(zipRf, actor);
-        String fn = zipRf.getFileName();
-        String zipExt = extractExtension(fn == null ? "" : fn).replace(".", "").toLowerCase(Locale.ROOT);
-        if (fn == null || !"zip".equals(zipExt)) {
-            throw new IllegalArgumentException("Archive entry streaming is only available for .zip resources.");
-        }
-        String normalized = normalizeClientZipEntryPath(entryPath);
-        Path diskPath = Paths.get(zipRf.getFilePath());
-        if (!Files.isRegularFile(diskPath)) {
-            throw new IllegalArgumentException("Stored file is missing on disk.");
-        }
-
-        String innerBaseName = normalized.contains("/")
-                ? normalized.substring(normalized.lastIndexOf('/') + 1)
-                : normalized;
-
-        try (ZipFile zf = new ZipFile(diskPath.toFile(), StandardCharsets.UTF_8)) {
-            ZipEntry ze = zf.getEntry(normalized);
-            if (ze == null) {
-                throw new IllegalArgumentException("Entry not found in archive.");
-            }
-            if (ze.isDirectory() || normalized.endsWith("/")) {
-                throw new IllegalArgumentException("Cannot preview a directory.");
-            }
-            long declared = ze.getSize();
-            if (declared >= 0 && declared > ZIP_ENTRY_PREVIEW_MAX_BYTES) {
-                throw new IllegalArgumentException("Entry is too large to preview (max 15 MB). Download the ZIP instead.");
-            }
-            byte[] bytes;
-            try (InputStream in = zf.getInputStream(ze)) {
-                bytes = readZipEntryLimited(in, declared, ZIP_ENTRY_PREVIEW_MAX_BYTES);
-            }
-            String mime = guessMimeForArchiveInnerName(innerBaseName);
-            auditService.record(AuditAction.DOWNLOAD_RESOURCE, actor,
-                    "Previewed ZIP entry #" + id + " path=" + normalized);
-            return new ResourceDownload(innerBaseName, new ByteArrayResource(bytes), mime);
-        } catch (IOException ex) {
-            log.warn("ZIP entry read failed id={} path={}: {}", id, normalized, ex.getMessage());
-            throw new IllegalArgumentException("Could not read archive entry.");
-        }
-    }
-
-    private static String normalizeClientZipEntryPath(String path) {
-        if (path == null || path.isBlank()) {
-            throw new IllegalArgumentException("Entry path is required.");
-        }
-        String p = path.trim().replace('\\', '/');
-        while (p.startsWith("/")) {
-            p = p.substring(1);
-        }
-        if (!isSafeZipEntryPath(p)) {
-            throw new IllegalArgumentException("Invalid entry path.");
-        }
-        return p;
-    }
-
-    private static byte[] readZipEntryLimited(InputStream in, long declaredSize, long maxBytes) throws IOException {
-        if (declaredSize >= 0 && declaredSize > maxBytes) {
-            throw new IllegalArgumentException("Entry is too large to preview.");
-        }
-        int initialCap = 8192;
-        if (declaredSize >= 0 && declaredSize <= Integer.MAX_VALUE) {
-            initialCap = (int) Math.min(declaredSize, maxBytes);
-            if (initialCap <= 0) {
-                initialCap = 8192;
-            }
-        }
-        ByteArrayOutputStream bos = new ByteArrayOutputStream(initialCap);
-        byte[] buf = new byte[8192];
-        long total = 0;
-        int n;
-        while ((n = in.read(buf)) >= 0) {
-            total += n;
-            if (total > maxBytes) {
-                throw new IllegalArgumentException("Entry is too large to preview (max 15 MB).");
-            }
-            bos.write(buf, 0, n);
-        }
-        return bos.toByteArray();
-    }
-
-    private static String guessMimeForArchiveInnerName(String innerFileName) {
-        int dot = innerFileName.lastIndexOf('.');
-        if (dot < 0 || dot == innerFileName.length() - 1) {
-            return "application/octet-stream";
-        }
-        String innerExt = innerFileName.substring(dot + 1).toLowerCase(Locale.ROOT);
-        return switch (innerExt) {
-            case "pdf" -> "application/pdf";
-            case "png" -> "image/png";
-            case "jpg", "jpeg" -> "image/jpeg";
-            case "gif" -> "image/gif";
-            case "webp" -> "image/webp";
-            case "bmp" -> "image/bmp";
-            case "svg" -> "image/svg+xml";
-            case "txt", "csv", "log" -> "text/plain; charset=UTF-8";
-            case "json" -> "application/json; charset=UTF-8";
-            case "md", "markdown" -> "text/markdown; charset=UTF-8";
-            case "xml" -> "application/xml; charset=UTF-8";
-            case "html", "htm" -> "text/html; charset=UTF-8";
-            case "css" -> "text/css; charset=UTF-8";
-            case "js" -> "text/javascript; charset=UTF-8";
-            case "ts" -> "text/plain; charset=UTF-8";
-            case "yml", "yaml" -> "application/yaml; charset=UTF-8";
-            default -> "application/octet-stream";
-        };
-    }
-
-    @Override
-    @Transactional(readOnly = true)
     public ResourceFileResponse detail(Long id, String keyword, String actor) {
         ResourceFile resourceFile = resourceFileRepository.findById(id)
                 .orElseThrow(() -> new ResourceFileNotFoundException(id));
@@ -517,24 +480,9 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         String normalizedFileType = normalize(request.fileType());
         String normalizedCategory = normalize(request.category());
         String normalizedUploader = normalize(request.uploader());
+        validateKeywordLength(normalizedKeyword);
+
         if (normalizedKeyword != null) {
-            validateKeywordLength(normalizedKeyword);
-        }
-        validateUploadDateRange(request.uploadDateFrom(), request.uploadDateTo());
-
-        boolean keywordPresent = normalizedKeyword != null;
-        boolean anyCriteria =
-                keywordPresent
-                || normalizedFileType != null
-                || normalizedCategory != null
-                || normalizedUploader != null
-                || request.uploadDateFrom() != null
-                || request.uploadDateTo() != null;
-        if (!anyCriteria) {
-            return new ResourceSearchResponse(List.of(), null);
-        }
-
-        if (keywordPresent) {
             try {
                 ResourceSearchService.SearchResult result = resourceSearchService.search(request);
                 if (!result.ids().isEmpty()) {
@@ -544,15 +492,13 @@ public class ResourceFileServiceImpl implements ResourceFileService {
                             result.ids().stream()
                                     .map(fileMap::get)
                                     .filter(java.util.Objects::nonNull)
-                                    .filter(file -> canAccess(file, actor))
-                                    .filter(file -> matchesUploadDateRange(request.uploadDateFrom(), request.uploadDateTo(), file))
                                     .map(file -> ResourceFileResponse.from(file, result.highlights().get(file.getId())))
                                     .toList(),
                             result.suggestion()
                     );
                 }
             } catch (Exception ignored) {
-                // fallback to DB search below
+                // fallback to SQL search
             }
         }
 
@@ -564,7 +510,6 @@ public class ResourceFileServiceImpl implements ResourceFileService {
                 .filter(file -> matchesFileType(file, normalizedFileType))
                 .filter(file -> matchesEqualsIgnoreCase(file.getCategory(), normalizedCategory))
                 .filter(file -> matchesEqualsIgnoreCase(file.getUploader().getUsername(), normalizedUploader))
-                .filter(file -> matchesUploadDateRange(request.uploadDateFrom(), request.uploadDateTo(), file))
                 .toList();
 
         List<ResourceFileResponse> items = baseFiles.stream()
@@ -581,61 +526,6 @@ public class ResourceFileServiceImpl implements ResourceFileService {
                 .stream()
                 .filter(file -> canAccess(file, actor))
                 .map(file -> ResourceFileResponse.from(file))
-                .toList();
-    }
-
-    @Override
-    @Transactional
-    public void addFavourite(long resourceId, String actor) {
-        UserAccount user = requireActor(actor);
-        ResourceFile file = resourceFileRepository.findById(resourceId)
-                .orElseThrow(() -> new ResourceFileNotFoundException(resourceId));
-        assertCanAccess(file, actor);
-        if (userResourceFavouriteRepository.existsByUser_IdAndResourceFile_Id(user.getId(), resourceId)) {
-            return;
-        }
-        UserResourceFavourite row = new UserResourceFavourite();
-        row.setUser(user);
-        row.setResourceFile(file);
-        userResourceFavouriteRepository.save(row);
-    }
-
-    @Override
-    @Transactional
-    public void removeFavourite(long resourceId, String actor) {
-        UserAccount user = requireActor(actor);
-        userResourceFavouriteRepository.deleteByUser_IdAndResourceFile_Id(user.getId(), resourceId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<ResourceFileResponse> listFavourites(String actor) {
-        UserAccount user = requireActor(actor);
-        List<UserResourceFavourite> favourites = userResourceFavouriteRepository.findByUser_IdOrderByCreatedAtDesc(user.getId());
-        if (favourites.isEmpty()) {
-            return List.of();
-        }
-        List<Long> orderedIds = favourites.stream()
-                .map(f -> f.getResourceFile().getId())
-                .toList();
-        Map<Long, ResourceFile> fileMap = resourceFileRepository.findAllById(orderedIds).stream()
-                .collect(Collectors.toMap(ResourceFile::getId, f -> f));
-        List<ResourceFileResponse> out = new ArrayList<>();
-        for (Long id : orderedIds) {
-            ResourceFile file = fileMap.get(id);
-            if (file != null && canAccess(file, actor)) {
-                out.add(ResourceFileResponse.from(file));
-            }
-        }
-        return out;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<Long> listFavouriteResourceIds(String actor) {
-        UserAccount user = requireActor(actor);
-        return userResourceFavouriteRepository.findByUser_IdOrderByCreatedAtDesc(user.getId()).stream()
-                .map(f -> f.getResourceFile().getId())
                 .toList();
     }
 
@@ -726,21 +616,17 @@ public class ResourceFileServiceImpl implements ResourceFileService {
     }
 
     private boolean canAccess(ResourceFile file, String actor) {
-        if (file.getVisibility() == ResourceVisibility.L1) {
+        if (actor == null || actor.isBlank()) {
+            return false;
+        }
+        if (file.getVisibility() == ResourceVisibility.PUBLIC) {
             return true;
         }
-        if (file.getVisibility() == ResourceVisibility.L2) {
-            return authService.isApprovedMember(actor);
-        }
-        if (file.getVisibility() == ResourceVisibility.L3) {
+        if (file.getVisibility() == ResourceVisibility.L1 || file.getVisibility() == ResourceVisibility.L2) {
             return authService.isPrivilegedUser(actor);
         }
         if (file.getVisibility() == ResourceVisibility.HIDDEN) {
-            if (actor == null || actor.isBlank()) {
-                return false;
-            }
-            return authService.roleOf(actor) == RoleType.ADMIN
-                    || file.getUploader().getUsername().equals(actor);
+            return file.getUploader().getUsername().equals(actor);
         }
         return false;
     }
@@ -876,10 +762,6 @@ public class ResourceFileServiceImpl implements ResourceFileService {
     }
 
     private String buildPreviewContent(ResourceFile file) {
-        String fileName = file.getFileName();
-        if (fileName != null && fileName.toLowerCase().endsWith(".zip")) {
-            return null;
-        }
         String content = file.getContentText();
         if (content == null || content.isBlank()) {
             return null;
@@ -953,31 +835,6 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         if (codePoints < 2) {
             throw new IllegalArgumentException("Keyword must contain at least 2 characters.");
         }
-    }
-
-    private void validateUploadDateRange(LocalDate from, LocalDate to) {
-        if (from != null && to != null && from.isAfter(to)) {
-            throw new IllegalArgumentException("uploadDateFrom must be on or before uploadDateTo.");
-        }
-    }
-
-    /** Stored upload time uses Asia/Hong_Kong wall clock; compare by calendar date only. */
-    private boolean matchesUploadDateRange(LocalDate from, LocalDate to, ResourceFile file) {
-        if (from == null && to == null) {
-            return true;
-        }
-        java.time.LocalDateTime t = file.getUploadTime();
-        if (t == null) {
-            return false;
-        }
-        LocalDate d = t.toLocalDate();
-        if (from != null && d.isBefore(from)) {
-            return false;
-        }
-        if (to != null && d.isAfter(to)) {
-            return false;
-        }
-        return true;
     }
 
     private String fallbackEnglishSuggestion(String keyword, List<ResourceFile> files) {
@@ -1079,6 +936,34 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         return rel;
     }
 
+    private String buildFolderDisplayPath(Folder folder) {
+        if (folder == null || folder.getId() == 1) {
+            return "Root";
+        }
+        java.util.ArrayDeque<String> parts = new java.util.ArrayDeque<>();
+        Folder cur = folder;
+        while (cur != null && cur.getId() != 1) {
+            parts.addFirst(cur.getName());
+            cur = cur.getParent();
+        }
+        return String.join(" / ", parts);
+    }
+
+    private List<Long> collectFolderIds(Folder root) {
+        List<Long> ids = new java.util.ArrayList<>();
+        ids.add(root.getId());
+        collectChildFolderIds(root, ids);
+        return ids;
+    }
+
+    private void collectChildFolderIds(Folder folder, List<Long> ids) {
+        List<Folder> children = folderRepository.findByParentId(folder.getId());
+        for (Folder child : children) {
+            ids.add(child.getId());
+            collectChildFolderIds(child, ids);
+        }
+    }
+
     private String safePathSegment(String raw) {
         if (!StringUtils.hasText(raw)) return "untitled";
         String s = raw.trim();
@@ -1105,4 +990,276 @@ public class ResourceFileServiceImpl implements ResourceFileService {
         while (s.startsWith("/")) s = s.substring(1);
         return s;
     }
+
+    // ========== New Session-Based Upload Methods ==========
+
+    @Override
+    @Transactional
+    public UploadSession initializeUploadSession(InitializeUploadRequest request, String actor) {
+        if (!authService.isPrivilegedUser(actor)) {
+            throw new IllegalArgumentException("Only administrators can upload folders");
+        }
+
+        UploadSession session = uploadQueueManager.createSession(
+                request.sessionId(),
+                actor,
+                request.totalFiles(),
+                request.totalBytes()
+        );
+
+        return session;
+    }
+
+    @Override
+    @Transactional
+    public UploadTaskRecord queueFileUpload(UploadFileRequest request, MultipartFile file, String actor) throws IOException {
+        try {
+            log.info("queueFileUpload: sessionId={}, displayName={}, folderId={}, fileSize={}, actor={}", 
+                    request.sessionId(), request.displayName(), request.folderId(), file.getSize(), actor);
+
+            UploadSession session = uploadQueueManager.getSessionStatus(request.sessionId());
+
+            if (!session.getUploader().equals(actor)) {
+                throw new IllegalArgumentException("Upload session belongs to another user");
+            }
+
+            Folder folder = requireFolder(request.folderId());
+            log.debug("Folder found: id={}, name={}", folder.getId(), folder.getName());
+
+            UploadTaskRecord task = uploadQueueManager.createTask(
+                    session,
+                    request.clientPath(),
+                    request.displayName(),
+                    request.folderId(),
+                    file.getSize(),
+                    request.category(),
+                    request.description(),
+                    request.tags(),
+                    request.visibility()
+            );
+            log.debug("Task created: id={}, status={}", task.getId(), task.getStatus());
+
+            // Upload file in chunks and calculate hash
+            log.debug("Starting chunked upload for taskId={}", task.getId());
+            ChunkedUploadService.UploadChunkResult chunkResult = chunkedUploadService.uploadFileInChunks(
+                    file,
+                    task,
+                    null
+            );
+            log.debug("Chunked upload completed for taskId={}, hash={}", task.getId(), chunkResult.fileHash);
+
+            task.setFileHash(chunkResult.fileHash);
+            task = uploadTaskRecordRepository.save(task);
+            log.info("Task updated with hash: taskId={}", task.getId());
+
+            // Queue the task for processing
+            uploadQueueManager.queueTask(task, request.sessionId());
+            log.info("Task queued successfully: taskId={}, displayName={}", task.getId(), request.displayName());
+
+            return task;
+        } catch (IOException e) {
+            log.error("IO error during queueFileUpload for {}: {}", request.displayName(), e.getMessage(), e);
+            throw e;
+        } catch (Exception e) {
+            log.error("Error during queueFileUpload for {}: {}", request.displayName(), e.getMessage(), e);
+            throw new IOException("Failed to queue file upload: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    @Transactional
+    public ResourceFileResponse completeFileUpload(Long taskId, String actor) throws IOException {
+        log.info("Starting completeFileUpload: taskId={}, actor={}", taskId, actor);
+        UploadTaskRecord task = uploadTaskRecordRepository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Upload task not found: " + taskId));
+
+        if (!task.getSession().getUploader().equals(actor)) {
+            throw new IllegalArgumentException("You do not have permission to access this upload task");
+        }
+
+        if (task.getStatus() == UploadTaskStatus.FAILED || task.getStatus() == UploadTaskStatus.CANCELLED) {
+            throw new IllegalArgumentException("Cannot complete upload task with status: " + task.getStatus());
+        }
+
+        if (task.getResourceFileId() != null) {
+            log.info("Task {} already has resourceFileId={}, returning existing resource", taskId, task.getResourceFileId());
+            ResourceFile existingFile = resourceFileRepository.findById(task.getResourceFileId())
+                    .orElseThrow(() -> new IllegalStateException("Resource file record not found: " + task.getResourceFileId()));
+            return ResourceFileResponse.from(existingFile);
+        }
+
+        Folder folder = requireFolder(task.getFolderId());
+        log.debug("Target folder: id={}, name={}", folder.getId(), folder.getName());
+
+        // Get temp file path
+        Path tempFilePath = Paths.get(chunkedUploadService.getTempUploadDir(), 
+                task.getSession().getSessionId() + "_" + task.getId() + ".tmp");
+        log.debug("Temp file path: {}", tempFilePath);
+
+        if (!Files.exists(tempFilePath)) {
+            log.error("Temp file missing for taskId={}: {}", taskId, tempFilePath);
+            throw new IllegalStateException("Uploaded file not found in temp location: " + tempFilePath);
+        }
+
+        long tempFileSize = Files.size(tempFilePath);
+        log.debug("Temp file exists with size: {} bytes", tempFileSize);
+
+        // Create folder directory structure
+        Path folderPath = uploadDir.resolve(folderRelativePath(folder));
+        log.debug("Creating folder structure at: {}", folderPath);
+        Files.createDirectories(folderPath);
+
+        // Generate unique storage filename
+        String safeName = safeFileName(task.getDisplayName());
+        String storageFileName = UUID.randomUUID() + "-" + safeName;
+        Path targetPath = folderPath.resolve(storageFileName);
+        log.debug("Target path: {}", targetPath);
+
+        // Move file to final location
+        try {
+            log.info("Moving temp file to final location for taskId={}: {} -> {}", taskId, tempFilePath, targetPath);
+            Files.move(tempFilePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+            log.info("File moved successfully for taskId={}", taskId);
+        } catch (IOException e) {
+            log.error("Failed to move file for taskId={}: {}", taskId, e.getMessage(), e);
+            throw new IOException("Failed to move uploaded file from temp location to final location: " + e.getMessage(), e);
+        }
+
+        verifyStorageFile(targetPath, safeName);
+        log.debug("Storage file verified for taskId={}", taskId);
+
+        // Create resource file from the uploaded task
+        ResourceFile resourceFile = new ResourceFile();
+        resourceFile.setTitle(task.getDisplayName());
+        resourceFile.setDescription(task.getDescription());
+        resourceFile.setCategory(task.getCategory() != null ? task.getCategory() : "bulk");
+        resourceFile.setTags(normalizeTags(task.getTags()));
+        resourceFile.setVisibility(task.getVisibility() != null ? task.getVisibility() : ResourceVisibility.HIDDEN);
+        resourceFile.setFileName(safeName);
+        resourceFile.setFileType("application/octet-stream");
+        resourceFile.setFileSize(task.getFileSize());
+        resourceFile.setStorageFileName(storageFileName);
+        resourceFile.setFilePath(targetPath.toString());
+        resourceFile.setFolder(folder);
+        resourceFile.setUploader(requireActor(actor));
+
+        // Extract content for search indexing
+        String extractedContent = fileContentExtractor.extract(targetPath, safeName);
+        resourceFile.setContentText(extractedContent);
+
+        ResourceFile saved = resourceFileRepository.save(resourceFile);
+        log.info("Resource file saved for taskId={}, resourceFileId={}, path={}", taskId, saved.getId(), targetPath);
+
+        // Update task with resource file ID and status
+        task.setResourceFileId(saved.getId());
+        task.setStatus(UploadTaskStatus.SUCCESS);
+        uploadTaskRecordRepository.save(task);
+        log.info("Task updated: taskId={}, status=SUCCESS, resourceFileId={}", taskId, saved.getId());
+
+        try {
+            resourceSearchService.index(saved, extractedContent);
+        } catch (Exception ex) {
+            log.warn("Failed to index resource {} to Elasticsearch: {}", saved.getId(), ex.getMessage());
+        }
+
+        log.info("completeFileUpload finished successfully for taskId={}", taskId);
+        return ResourceFileResponse.from(saved);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UploadSessionResponse getUploadSessionStatus(String sessionId, String actor) {
+        UploadSession session = uploadQueueManager.getSessionStatus(sessionId);
+
+        if (!session.getUploader().equals(actor) && !authService.isPrivilegedUser(actor)) {
+            throw new IllegalArgumentException("You do not have permission to access this session");
+        }
+
+        List<UploadTaskRecord> tasks = uploadTaskRecordRepository.findBySessionId(session.getId());
+
+        var taskResponses = tasks.stream()
+                .map(t -> new UploadTaskResponse(
+                        t.getId(),
+                        t.getClientPath(),
+                        t.getDisplayName(),
+                        t.getStatus(),
+                        t.getFileSize(),
+                        t.getUploadedBytes(),
+                        t.getProgressPercentage(),
+                        t.getResourceFileId(),
+                        t.getErrorMessage(),
+                        t.getRetryCount()
+                ))
+                .toList();
+
+        return new UploadSessionResponse(
+                session.getSessionId(),
+                session.getStatus(),
+                session.getTotalFiles(),
+                session.getUploadedFiles(),
+                session.getFailedFiles(),
+                session.getTotalBytes(),
+                session.getUploadedBytes(),
+                session.getProgressPercentage(),
+                session.getErrorMessage(),
+                session.getCreatedAt(),
+                session.getUpdatedAt(),
+                session.getExpiresAt(),
+                taskResponses
+        );
+    }
+
+    @Override
+    @Transactional
+    public void pauseUploadSession(String sessionId, String actor) {
+        UploadSession session = uploadQueueManager.getSessionStatus(sessionId);
+
+        if (!session.getUploader().equals(actor)) {
+            throw new IllegalArgumentException("You do not have permission to pause this session");
+        }
+
+        uploadQueueManager.pauseSession(sessionId);
+        auditService.record(AuditAction.UPLOAD_RESOURCE, actor, "Paused upload session " + sessionId);
+    }
+
+    @Override
+    @Transactional
+    public void resumeUploadSession(String sessionId, String actor) {
+        UploadSession session = uploadQueueManager.getSessionStatus(sessionId);
+
+        if (!session.getUploader().equals(actor)) {
+            throw new IllegalArgumentException("You do not have permission to resume this session");
+        }
+
+        uploadQueueManager.resumeSession(sessionId);
+        auditService.record(AuditAction.UPLOAD_RESOURCE, actor, "Resumed upload session " + sessionId);
+    }
+
+    @Override
+    public void completeUploadSession(String sessionId, String actor) {
+        UploadSession session = uploadQueueManager.getSessionStatus(sessionId);
+
+        if (!session.getUploader().equals(actor)) {
+            throw new IllegalArgumentException("You do not have permission to complete this session");
+        }
+
+        // Immediately start async processing; do not block
+        uploadQueueManager.resumeSession(sessionId);
+        log.info("Upload session {} started async processing. Frontend should poll status endpoint.", sessionId);
+    }
+
+    @Override
+    @Transactional
+    public void cancelUploadSession(String sessionId, String actor) {
+        UploadSession session = uploadQueueManager.getSessionStatus(sessionId);
+
+        if (!session.getUploader().equals(actor)) {
+            throw new IllegalArgumentException("You do not have permission to cancel this session");
+        }
+
+        uploadQueueManager.cancelSession(sessionId);
+        auditService.record(AuditAction.UPLOAD_RESOURCE, actor, "Cancelled upload session " + sessionId);
+    }
+
+    // Helper record class for upload task response (inner class)
 }

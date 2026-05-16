@@ -32,7 +32,7 @@ public class SearchReindexBootstrapConfig {
                 String extractedContent = "";
                 try {
                     Path path = Paths.get(file.getFilePath());
-                    extractedContent = fileContentExtractor.extractForIndexing(path, file.getFileName());
+                    extractedContent = fileContentExtractor.extract(path, file.getFileName());
                 } catch (Exception ignored) {
                     // keep metadata-only index for unreadable files
                 }

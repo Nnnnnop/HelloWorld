@@ -63,13 +63,3 @@ export function updateRole(payload) {
     body: JSON.stringify(payload)
   })
 }
-
-/** ADMIN only: fuzzy username lookup (≥2 chars) for assigning site roles. */
-export function searchUsersForRoles(q) {
-  const trimmed = typeof q === 'string' ? q.trim() : ''
-  if (!trimmed) {
-    return Promise.resolve([])
-  }
-  const qs = new URLSearchParams({ q: trimmed })
-  return request(`${BASE_URL}/users/search?${qs.toString()}`)
-}

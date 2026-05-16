@@ -31,7 +31,7 @@ public class UserAccount {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private RoleType role = RoleType.STUDENT;
+    private RoleType role = RoleType.GUEST;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -46,10 +46,6 @@ public class UserAccount {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "member_site_tier", nullable = false, length = 10)
-    private MemberSiteTier memberSiteTier;
-
     private LocalDateTime approvedAt;
 
     @PrePersist
@@ -58,10 +54,7 @@ public class UserAccount {
             createdAt = LocalDateTime.now();
         }
         if (role == null) {
-            role = RoleType.STUDENT;
-        }
-        if (memberSiteTier == null) {
-            memberSiteTier = role == RoleType.STUDENT ? MemberSiteTier.L1 : MemberSiteTier.L2;
+            role = RoleType.GUEST;
         }
         if (status == null) {
             status = UserStatus.PENDING;
@@ -111,14 +104,6 @@ public class UserAccount {
         this.role = role;
     }
 
-    public MemberSiteTier getMemberSiteTier() {
-        return memberSiteTier;
-    }
-
-    public void setMemberSiteTier(MemberSiteTier memberSiteTier) {
-        this.memberSiteTier = memberSiteTier;
-    }
-
     public UserStatus getStatus() {
         return status;
     }
@@ -157,17 +142,5 @@ public class UserAccount {
 
     public void setApprovedAt(LocalDateTime approvedAt) {
         this.approvedAt = approvedAt;
-    }
-
-    /** Human-readable site access tier for admins (Member L1 vs L2, Admin, Student). */
-    public String getSiteAccessLevelLabel() {
-        if (role == RoleType.ADMIN) {
-            return "Administrator";
-        }
-        if (role == RoleType.MEMBER) {
-            MemberSiteTier t = memberSiteTier != null ? memberSiteTier : MemberSiteTier.L1;
-            return t == MemberSiteTier.L2 ? "Level 2 (Member)" : "Level 1 (Member)";
-        }
-        return "Student";
     }
 }

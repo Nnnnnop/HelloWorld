@@ -68,12 +68,6 @@ public class AuthController {
         return ResponseEntity.ok(authService.updateRole(request, securityUtils.currentUsernameOrNull()));
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
-    @GetMapping("/users/search")
-    public ResponseEntity<List<UserResponse>> searchUsersForRoleManagement(@RequestParam("q") String q) {
-        return ResponseEntity.ok(authService.searchUsersForRoleManagement(q));
-    }
-
     @PostMapping("/password-reset/request")
     public ResponseEntity<Map<String, String>> passwordResetRequest(@Valid @RequestBody PasswordResetRequest request) {
         String token = authService.createPasswordResetToken(request);

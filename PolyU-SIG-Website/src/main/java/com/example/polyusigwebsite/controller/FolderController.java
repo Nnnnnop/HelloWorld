@@ -1,6 +1,7 @@
 package com.example.polyusigwebsite.controller;
 
 import com.example.polyusigwebsite.dto.FolderDto;
+import com.example.polyusigwebsite.entity.ResourceVisibility;
 import com.example.polyusigwebsite.service.FolderService;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -36,8 +37,10 @@ public class FolderController {
     public FolderDto createFolder(@RequestBody Map<String, String> body) {
         String name = body.get("name");
         String parentIdRaw = body.get("parentId");
+        String visibilityRaw = body.get("visibility");
         Long parentId = StringUtils.hasText(parentIdRaw) ? Long.valueOf(parentIdRaw) : null;
-        return folderService.createFolder(name, parentId);
+        ResourceVisibility visibility = StringUtils.hasText(visibilityRaw) ? ResourceVisibility.valueOf(visibilityRaw) : ResourceVisibility.HIDDEN;
+        return folderService.createFolder(name, parentId, visibility);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -45,8 +48,10 @@ public class FolderController {
     public FolderDto updateFolder(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
         String name = body.get("name");
         String parentRaw = body.get("parentId");
+        String visibilityRaw = body.get("visibility");
         Long parentId = StringUtils.hasText(parentRaw) ? Long.valueOf(parentRaw) : null;
-        return folderService.updateFolder(id, name, parentId);
+        ResourceVisibility visibility = StringUtils.hasText(visibilityRaw) ? ResourceVisibility.valueOf(visibilityRaw) : null;
+        return folderService.updateFolder(id, name, parentId, visibility);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
